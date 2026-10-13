@@ -214,6 +214,10 @@ func (d *renameDetector) detectContentRenames() error {
 		return nil
 	}
 
+	// Exact matching groups candidates in maps. Restore path order before
+	// scoring so equal similarity scores have deterministic tie-breaks.
+	sort.Sort(Changes(d.deleted))
+	sort.Sort(Changes(d.added))
 	srcs, dsts := d.deleted, d.added
 	matrix, err := buildSimilarityMatrix(srcs, dsts, d.renameScore)
 	if err != nil {

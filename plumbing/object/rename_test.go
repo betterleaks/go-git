@@ -160,6 +160,39 @@ func (s *RenameSuite) TestContentRename_OnePair() {
 	assertRename(s, changes[1], changes[0], result[0])
 }
 
+func (s *RenameSuite) TestContentRenameTiesUsePathOrder() {
+	common := strings.Repeat("shared unchanged content\n", 30)
+	a := makeDelete(s, makeFile(s, "a_old.rb", filemode.Regular, common+"old_a\n"))
+	b := makeDelete(s, makeFile(s, "b_old.rb", filemode.Regular, common+"old_b\n"))
+	c := makeAdd(s, makeFile(s, "c_new.rb", filemode.Regular, common+"new_c\n"))
+	d := makeAdd(s, makeFile(s, "d_new.rb", filemode.Regular, common+"new_d\n"))
+
+	// Exact matching rebuilds these lists from maps. Exercise both orders
+	// directly so the regression does not rely on random map iteration.
+	for _, deleted := range [][]*Change{{a, b}, {b, a}} {
+		for _, added := range [][]*Change{{c, d}, {d, c}} {
+			s.Run("deleted_"+deleted[0].From.Name+"/added_"+added[0].To.Name, func() {
+				detector := renameDetector{
+					deleted:     append([]*Change(nil), deleted...),
+					added:       append([]*Change(nil), added...),
+					renameScore: 50,
+					renameLimit: 1000,
+				}
+				s.Require().NoError(detector.detectContentRenames())
+				s.Len(detector.modified, 2)
+				s.Empty(detector.added)
+				s.Empty(detector.deleted)
+
+				pairs := make(map[string]string)
+				for _, change := range detector.modified {
+					pairs[change.To.Name] = change.From.Name
+				}
+				s.Equal(map[string]string{"c_new.rb": "a_old.rb", "d_new.rb": "b_old.rb"}, pairs)
+			})
+		}
+	}
+}
+
 func (s *RenameSuite) TestContentRename_OneRenameTwoUnrelatedFiles() {
 	changes := Changes{
 		makeAdd(s, makeFile(s, pathA, filemode.Regular, "foo\nbar\nbaz\nblarg\n")),
