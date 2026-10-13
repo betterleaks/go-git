@@ -166,30 +166,84 @@ func (s *RenameSuite) TestContentRenameTiesUsePathOrder() {
 	b := makeDelete(s, makeFile(s, "b_old.rb", filemode.Regular, common+"old_b\n"))
 	c := makeAdd(s, makeFile(s, "c_new.rb", filemode.Regular, common+"new_c\n"))
 	d := makeAdd(s, makeFile(s, "d_new.rb", filemode.Regular, common+"new_d\n"))
+	aLessSimilar := makeDelete(s, makeFile(s, "a_old.rb", filemode.Regular, common+strings.Repeat("different old content\n", 10)))
+	cLessSimilar := makeAdd(s, makeFile(s, "c_new.rb", filemode.Regular, common+strings.Repeat("different new content\n", 10)))
 
-	// Exact matching rebuilds these lists from maps. Exercise both orders
-	// directly so the regression does not rely on random map iteration.
-	for _, deleted := range [][]*Change{{a, b}, {b, a}} {
-		for _, added := range [][]*Change{{c, d}, {d, c}} {
-			s.Run("deleted_"+deleted[0].From.Name+"/added_"+added[0].To.Name, func() {
-				detector := renameDetector{
-					deleted:     append([]*Change(nil), deleted...),
-					added:       append([]*Change(nil), added...),
-					renameScore: 50,
-					renameLimit: 1000,
-				}
-				s.Require().NoError(detector.detectContentRenames())
-				s.Len(detector.modified, 2)
-				s.Empty(detector.added)
-				s.Empty(detector.deleted)
+	// Expected pairs were checked with Git 2.50.1's diff-tree -r -M50%.
+	testCases := []struct {
+		name    string
+		deleted [][]*Change
+		added   [][]*Change
+		want    [][2]string
+	}{
+		{
+			name:    "two_sources_two_destinations",
+			deleted: [][]*Change{{a, b}, {b, a}},
+			added:   [][]*Change{{c, d}, {d, c}},
+			want:    [][2]string{{"a_old.rb", "c_new.rb"}, {"b_old.rb", "d_new.rb"}},
+		},
+		{
+			name:    "two_sources_one_destination",
+			deleted: [][]*Change{{a, b}, {b, a}},
+			added:   [][]*Change{{c}},
+			want:    [][2]string{{"a_old.rb", "c_new.rb"}, {"b_old.rb", ""}},
+		},
+		{
+			name:    "one_source_two_destinations",
+			deleted: [][]*Change{{a}},
+			added:   [][]*Change{{c, d}, {d, c}},
+			want:    [][2]string{{"a_old.rb", "c_new.rb"}, {"", "d_new.rb"}},
+		},
+		{
+			name:    "higher_source_score",
+			deleted: [][]*Change{{aLessSimilar, b}, {b, aLessSimilar}},
+			added:   [][]*Change{{c}},
+			want:    [][2]string{{"a_old.rb", ""}, {"b_old.rb", "c_new.rb"}},
+		},
+		{
+			name:    "higher_destination_score",
+			deleted: [][]*Change{{a}},
+			added:   [][]*Change{{cLessSimilar, d}, {d, cLessSimilar}},
+			want:    [][2]string{{"a_old.rb", "d_new.rb"}, {"", "c_new.rb"}},
+		},
+	}
 
-				pairs := make(map[string]string)
-				for _, change := range detector.modified {
-					pairs[change.To.Name] = change.From.Name
+	for _, tc := range testCases {
+		s.Run(tc.name, func() {
+			assertPairs := func(changes Changes) {
+				pairs := make([][2]string, 0, len(changes))
+				for _, change := range changes {
+					pairs = append(pairs, [2]string{change.From.Name, change.To.Name})
 				}
-				s.Equal(map[string]string{"c_new.rb": "a_old.rb", "d_new.rb": "b_old.rb"}, pairs)
-			})
-		}
+				s.ElementsMatch(tc.want, pairs)
+			}
+
+			// Exact matching rebuilds these lists from maps. Exercise both
+			// orders directly so failure does not rely on map iteration.
+			for _, deleted := range tc.deleted {
+				for _, added := range tc.added {
+					s.Run("deleted_"+deleted[0].From.Name+"/added_"+added[0].To.Name, func() {
+						detector := renameDetector{
+							deleted:     append([]*Change(nil), deleted...),
+							added:       append([]*Change(nil), added...),
+							renameScore: 50,
+							renameLimit: 1000,
+						}
+						s.Require().NoError(detector.detectContentRenames())
+						result := append(Changes(nil), detector.modified...)
+						result = append(result, detector.added...)
+						result = append(result, detector.deleted...)
+						assertPairs(result)
+
+						changes := append(Changes(nil), deleted...)
+						changes = append(changes, added...)
+						result, err := DetectRenames(changes, &DiffTreeOptions{RenameScore: 50, RenameLimit: 1000})
+						s.Require().NoError(err)
+						assertPairs(result)
+					})
+				}
+			}
+		})
 	}
 }
 

@@ -1,6 +1,7 @@
 package object
 
 import (
+	"cmp"
 	"errors"
 	"io"
 	"slices"
@@ -227,7 +228,7 @@ func (d *renameDetector) detectContentRenames() error {
 
 	// Match rename pairs on a first come, first serve basis until
 	// we have looked at everything that is above the minimum score.
-	for _, pair := range slices.Backward(matrix) {
+	for _, pair := range matrix {
 		src := srcs[pair.deleted]
 		dst := dsts[pair.added]
 
@@ -503,7 +504,17 @@ outerLoop:
 		}
 	}
 
-	sort.Stable(matrix)
+	// Prefer higher scores, then earlier destinations and sources. The
+	// candidate lists are sorted by path before this matrix is built.
+	slices.SortFunc(matrix, func(a, b similarityPair) int {
+		if a.score != b.score {
+			return cmp.Compare(b.score, a.score)
+		}
+		if a.added != b.added {
+			return cmp.Compare(a.added, b.added)
+		}
+		return cmp.Compare(a.deleted, b.deleted)
+	})
 
 	return matrix, nil
 }
